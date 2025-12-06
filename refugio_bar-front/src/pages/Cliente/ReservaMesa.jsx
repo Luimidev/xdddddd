@@ -1,4 +1,3 @@
-
 import React, { useState } from "react";
 import { createReserva, getReservas } from "../../services/reservaService";
 import { sendNuevaReserva } from "../../services/websocket/socket";
@@ -20,13 +19,15 @@ const ReservaMesa = () => {
   const [ocupaciones, setOcupaciones] = useState([]);
 
   React.useEffect(() => {
-    getMesas().then(res => {
-      let lista = Array.isArray(res) ? res : (res.data || []);
-      setMesas(lista);
-      setLoading(false);
-    }).catch(() => setLoading(false));
+    getMesas()
+      .then(res => {
+        let lista = Array.isArray(res) ? res : (res.data || []);
+        setMesas(lista);
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
   }, []);
-  // Limpiar selección de mesa si ya no está disponible al cambiar fecha/hora
+
   React.useEffect(() => {
     if (!form.mesaId) return;
     const mesaSel = mesas.find(m => String(m.id) === String(form.mesaId));
@@ -34,7 +35,7 @@ const ReservaMesa = () => {
       setForm(f => ({ ...f, mesaId: "" }));
     }
   }, [form.mesaId, form.fecha, form.hora, reservas, mesas]);
-  // Cargar reservas y ocupaciones cuando cambia fecha/hora
+
   React.useEffect(() => {
     if (!form.fecha || !form.hora) {
       setReservas([]);
@@ -42,14 +43,13 @@ const ReservaMesa = () => {
       return;
     }
     setCheckingReservas(true);
-    Promise.all([
-      getReservas(),
-      getOcupacionesActivas()
-    ]).then(([res, ocup]) => {
-      setReservas(Array.isArray(res) ? res : (res.data || []));
-      setOcupaciones(Array.isArray(ocup) ? ocup : (ocup.data || []));
-      setCheckingReservas(false);
-    }).catch(() => setCheckingReservas(false));
+    Promise.all([getReservas(), getOcupacionesActivas()])
+      .then(([res, ocup]) => {
+        setReservas(Array.isArray(res) ? res : (res.data || []));
+        setOcupaciones(Array.isArray(ocup) ? ocup : (ocup.data || []));
+        setCheckingReservas(false);
+      })
+      .catch(() => setCheckingReservas(false));
   }, [form.fecha, form.hora]);
 
   const handleChange = (e) => {
@@ -59,22 +59,32 @@ const ReservaMesa = () => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError(null);
+
     try {
       const userId = localStorage.getItem("userId");
       if (!userId) throw new Error("No autenticado");
       if (!form.mesaId) throw new Error("Selecciona una mesa");
-      // Combinar fecha y hora en un solo Date
+
+      // ⛔ VALIDACIÓN DE FECHA PASADA
+      const ahora = new Date();
+      ahora.setSeconds(0, 0);
+
       const fechaHora = new Date(`${form.fecha}T${form.hora}`);
-      // Validar que no exista reserva para esa mesa y horario
+      if (fechaHora < ahora) {
+        throw new Error("No puedes reservar en una fecha u hora anterior a la actual.");
+      }
+
+      // VALIDACIÓN DE RESERVA EXISTENTE
       const reservas = await getReservas();
       const existeReserva = reservas.some(r => {
         const mismaMesa = (r.mesa?.id || r.mesa) == form.mesaId;
         const estadoValido = r.estado === 'PENDIENTE' || r.estado === 'CONFIRMADA';
-        // Considerar reservas en la misma hora exacta (puedes mejorar con rango si lo deseas)
         const mismaHora = new Date(r.fechaHora).getTime() === fechaHora.getTime();
         return mismaMesa && estadoValido && mismaHora;
       });
+
       if (existeReserva) throw new Error("Ya existe una reserva para esa mesa y horario");
+
       const reservaPayload = {
         usuario: { id: userId },
         mesa: { id: form.mesaId },
@@ -82,16 +92,18 @@ const ReservaMesa = () => {
         personas: Number(form.personas),
         estado: "PENDIENTE"
       };
+
       const reservaCreada = await createReserva(reservaPayload);
-      sendNuevaReserva(reservaCreada); // Notifica al mozo
+      sendNuevaReserva(reservaCreada);
+
       alert("Reserva realizada correctamente");
       setForm({ fecha: "", hora: "", personas: 1, mesaId: "" });
+
     } catch (err) {
       setError(err.message || "Error al reservar");
     }
   };
 
-  // Colores por estado y reservas
   const estadoColor = (mesa, reservada) => {
     if (reservada) return 'bg-yellow-200 border-yellow-500 text-yellow-900';
     const s = (mesa.estado || '').toLowerCase();
@@ -100,21 +112,20 @@ const ReservaMesa = () => {
     return 'bg-gray-200 border-gray-400 text-gray-700';
   };
 
-  // Lógica de traslape de reservas y ocupaciones (1 hora)
   const mesaReservadaEnHorario = (mesa) => {
     if (!form.fecha || !form.hora) return false;
     const fechaSeleccionada = new Date(`${form.fecha}T${form.hora}`);
-    // Reservas
+
     const reservada = reservas.some(r => {
       if (!r.mesa) return false;
       const idMesa = r.mesa.id || r.mesa;
       if (String(idMesa) !== String(mesa.id)) return false;
       if (!(r.estado === 'PENDIENTE' || r.estado === 'CONFIRMADA')) return false;
       const inicio = new Date(r.fechaHora);
-      const fin = new Date(inicio.getTime() + 60 * 60 * 1000); // +1 hora
+      const fin = new Date(inicio.getTime() + 60 * 60 * 1000);
       return fechaSeleccionada >= inicio && fechaSeleccionada < fin;
     });
-    // Ocupaciones
+
     const ocupada = ocupaciones.some(o => {
       if (!o.mesa) return false;
       const idMesa = o.mesa.id || o.mesa;
@@ -124,11 +135,11 @@ const ReservaMesa = () => {
       const fin = new Date(o.fechaHoraFin);
       return fechaSeleccionada >= inicio && fechaSeleccionada < fin;
     });
+
     return reservada || ocupada;
   };
 
   const esDisponible = (mesa) => {
-    // Si la mesa está reservada en ese horario, no está disponible
     if (mesaReservadaEnHorario(mesa)) return false;
     const s = (mesa.estado || '').toLowerCase();
     return s === 'libre' || s === 'disponible';
@@ -147,10 +158,8 @@ const ReservaMesa = () => {
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-4">
               {mesas.map(m => {
                 const reservada = mesaReservadaEnHorario(m);
-                // Buscar ocupación activa para mostrar rango
                 let ocupacionMsg = null;
                 if (!esDisponible(m)) {
-                  // Buscar ocupación activa para este horario
                   const fechaSeleccionada = form.fecha && form.hora ? new Date(`${form.fecha}T${form.hora}`) : null;
                   const ocup = ocupaciones.find(o => {
                     if (!o.mesa) return false;
@@ -184,7 +193,6 @@ const ReservaMesa = () => {
                       <span className="text-sm mt-1">Estado: {reservada ? 'Reservada' : m.estado}</span>
                       {String(form.mesaId) === String(m.id) && <span className="mt-1 text-blue-700 font-semibold text-xs">Seleccionada</span>}
                     </button>
-                    {/* Mensaje de ocupación si aplica */}
                     {ocupacionMsg && (
                       <span className="text-xs text-red-600 font-semibold mt-1 text-center w-full">{ocupacionMsg}</span>
                     )}
@@ -198,6 +206,7 @@ const ReservaMesa = () => {
           name="fecha"
           type="date"
           value={form.fecha}
+          min={new Date().toISOString().split("T")[0]}
           onChange={handleChange}
           className="w-full px-3 py-2 border rounded"
           required
@@ -222,7 +231,6 @@ const ReservaMesa = () => {
           required
           disabled={!form.mesaId}
         />
-        {/* Validación de capacidad */}
         {form.mesaId && (() => {
           const mesaSel = mesas.find(m => String(m.id) === String(form.mesaId));
           if (mesaSel && Number(form.personas) > Number(mesaSel.capacidad)) {
@@ -240,7 +248,14 @@ const ReservaMesa = () => {
             (form.mesaId && (() => {
               const mesaSel = mesas.find(m => String(m.id) === String(form.mesaId));
               return mesaSel && Number(form.personas) > Number(mesaSel.capacidad);
-            })())
+            })()) ||
+            (() => {
+              if (!form.fecha || !form.hora) return true;
+              const fechaHora = new Date(`${form.fecha}T${form.hora}`);
+              const ahora = new Date();
+              ahora.setSeconds(0, 0);
+              return fechaHora < ahora;
+            })()
           }
         >
           Reservar
@@ -251,3 +266,4 @@ const ReservaMesa = () => {
 };
 
 export default ReservaMesa;
+
